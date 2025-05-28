@@ -21,8 +21,13 @@ mongoose
   .catch((err) => console.error("MongoDB connection error:", err));
 
 const dataSchema = new mongoose.Schema({
-  content: String,
-  server: String,
+  content: { type: String, required: true },
+  server: { type: String, required: true },
+  severity: {
+    type: String,
+    enum: ["INFO", "WARN", "ERROR"],
+    default: "INFO",
+  },
   timestamp: { type: Date, default: Date.now },
 });
 
@@ -30,7 +35,6 @@ const DataModel = mongoose.model("Data", dataSchema);
 
 let buffer = [];
 
-// Load buffer from disk if exists
 if (fs.existsSync(BUFFER_FILE)) {
   try {
     const fileData = fs.readFileSync(BUFFER_FILE);
@@ -42,8 +46,22 @@ if (fs.existsSync(BUFFER_FILE)) {
 }
 
 app.post("/ingest", (req, res) => {
-  const { content, server } = req.body;
-  const logEntry = { content, server, timestamp: new Date() };
+  const { content, server, severity } = req.body;
+
+  if (!content || !server) {
+    return res.status(400).json({ message: "Content and server are required." });
+  }
+  if (severity && !["INFO", "WARN", "ERROR"].includes(severity)) {
+    return res.status(400).json({ message: "Invalid severity value." });
+  }
+
+  const logEntry = {
+    content,
+    server,
+    severity: severity || "INFO",
+    timestamp: new Date(),
+  };
+
   buffer.push(logEntry);
 
   if (buffer.length >= BATCH_SIZE) {
@@ -51,13 +69,16 @@ app.post("/ingest", (req, res) => {
       .then(() => {
         console.log(`Batch written: ${buffer.length}`);
         buffer = [];
+       
         fs.writeFileSync(BUFFER_FILE, JSON.stringify(buffer));
       })
       .catch((err) => {
         console.error("Batch insert failed:", err);
+      
+        fs.writeFileSync(BUFFER_FILE, JSON.stringify(buffer));
       });
   } else {
-    // Persist buffer to disk for crash recovery
+    
     fs.writeFileSync(BUFFER_FILE, JSON.stringify(buffer));
   }
 
@@ -66,11 +87,15 @@ app.post("/ingest", (req, res) => {
 
 app.get("/data", async (req, res) => {
   try {
-    const logs = await DataModel.find().sort({ timestamp: -1 }).limit(100);
+    const logs = await DataModel.find()
+      .sort({ timestamp: -1 }) 
+      .limit(100);
     res.json(logs);
   } catch (err) {
+    console.error("Failed to fetch data:", err);
     res.status(500).json({ error: "Failed to fetch data" });
   }
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  
